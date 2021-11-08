@@ -1,0 +1,17 @@
+material visualtag_01
+{
+  technique
+  {
+    pass
+    {
+      lighting off
+      texture_unit
+      {
+        texture visualtag_A.jpg
+        filtering none none none
+        scale 1.0 1.0
+      }
+    }
+  }
+}
+

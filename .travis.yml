@@ -1,0 +1,138 @@
+# Generic .travis.yml file for running continuous integration on Travis-CI for
+# any ROS package.
+#
+# Available here:
+#   - https://github.com/felixduvallet/ros-travis-integration
+#
+# This installs ROS on a clean Travis-CI virtual machine, creates a ROS
+# workspace, resolves all listed dependencies, and sets environment variables
+# (setup.bash). Then, it compiles the entire ROS workspace (ensuring there are
+# no compilation errors), and runs all the tests. If any of the compilation/test
+# phases fail, the build is marked as a failure.
+#
+# We handle two types of package dependencies specified in the package manifest:
+#   - system dependencies that can be installed using `rosdep`, including other
+#     ROS packages and system libraries. These dependencies must be known to
+#     `rosdistro` and are installed using apt-get.
+#   - package dependencies that must be checked out from source. These are handled by
+#     `wstool`, and should be listed in a file named dependencies.rosinstall.
+#
+
+# There are envioronment variables you may want to change, such as ROS_DISTRO,
+# ROSINSTALL_FILE, and the CATKIN_OPTIONS file.  See the README.md for more
+# information on these flags, and
+# https://docs.travis-ci.com/user/environment-variables/ for information about
+# Travis environment variables in general.
+#
+# Author: Felix Duvallet <felixd@gmail.com>
+
+# NOTE: The build lifecycle on Travis.ci is something like this:
+#    before_install
+#    install
+#    before_script
+#    script
+#    after_success or after_failure
+#    after_script
+#    OPTIONAL before_deploy
+#    OPTIONAL deploy
+#    OPTIONAL after_deploy
+
+################################################################################
+
+sudo: required
+cache:
+  - apt
+
+# Build all valid Ubuntu/ROS combinations available on Travis VMs.
+language: generic
+matrix:
+  include:
+  - name: "Bionic melodic"
+    dist: bionic
+    env: ROS_DISTRO=melodic
+
+# Configuration variables. All variables are global now, but this can be used to
+# trigger a build matrix for different ROS distributions if desired.
+env:
+  global:
+    - ROS_CI_DESKTOP="`lsb_release -cs`"  # e.g. [trusty|xenial|...]
+    - CI_SOURCE_PATH=$(pwd)
+    - ROSINSTALL_FILE=$CI_SOURCE_PATH/dependencies.rosinstall
+    - CATKIN_OPTIONS=$CI_SOURCE_PATH/catkin.options
+    - ROS_PARALLEL_JOBS='-j8 -l6'
+    # Set the python path manually to include /usr/-/python2.7/dist-packages
+    # as this is where apt-get installs python packages.
+    - PYTHONPATH=$PYTHONPATH:/usr/lib/python2.7/dist-packages:/usr/local/lib/python2.7/dist-packages
+
+################################################################################
+
+# Install system dependencies, namely a very barebones ROS setup.
+before_install:
+  - sudo sh -c "echo \"deb http://packages.ros.org/ros/ubuntu $ROS_CI_DESKTOP main\" > /etc/apt/sources.list.d/ros-latest.list"
+  - sudo apt-key adv --keyserver 'hkp://keyserver.ubuntu.com:80' --recv-key C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
+  - sudo apt-get update -qq
+  - sudo apt-get install dpkg
+  - sudo apt-get install -y python-catkin-pkg python-rosdep python-wstool ros-$ROS_DISTRO-desktop-full
+  - source /opt/ros/$ROS_DISTRO/setup.bash
+  # Prepare rosdep to install dependencies.
+  - sudo rosdep init
+  - rosdep update --include-eol-distros  # Support EOL distros.
+
+# Create a catkin workspace with the package under integration.
+install:
+  - ls
+#  - cd $CI_SOURCE_PATH
+#  - catkin_make
+#  - source devel/setup.bash
+
+# Install all dependencies, using wstool first and rosdep second.
+# wstool looks for a ROSINSTALL_FILE defined in the environment variables.
+before_script:
+  - sudo apt-get install -y libraw1394-11  libglademm-2.4-dev libgtkglextmm-x11-1.2-dev libatkmm-1.6-dev libcairomm-1.0-dev libglade2-0 libglademm-2.4-dev libglibmm-2.4-dev libgtkmm-2.4-dev libpangomm-1.4-dev libsigc++-2.0-dev
+  # source dependencies: install using wstool.
+  - cd $CI_SOURCE_PATH
+  - tar zxvf flycapture2-2.11.3.121-amd64-pkg.tgz
+  - cd flycapture2-2.11.3.121-amd64
+  - echo "y\n" | sudo ./install_flycapture_only_simulation.sh
+  - wstool init
+  - if [[ -f $ROSINSTALL_FILE ]] ; then wstool merge $ROSINSTALL_FILE ; fi
+  - wstool up
+  # package depdencies: install using rosdep.
+  - cd $CI_SOURCE_PATH
+#  - rosdep install -y --from-paths src --ignore-src --rosdistro $ROS_DISTRO
+  - sudo apt-get install -y ros-$ROS_DISTRO-libg2o
+  - sudo apt-get install -y ros-$ROS_DISTRO-controller-manager
+  - sudo apt-get install -y ros-$ROS_DISTRO-realtime-tools
+  - sudo apt-get install -y ros-$ROS_DISTRO-rosserial-server
+  - sudo apt-get install -y ros-$ROS_DISTRO-robot-localization
+  - sudo apt-get install -y ros-$ROS_DISTRO-move-base
+  - sudo apt-get install -y ros-$ROS_DISTRO-interactive-marker-twist-server
+  - sudo apt-get install -y ros-$ROS_DISTRO-gazebo-ros-control
+  - sudo apt-get install -y ros-$ROS_DISTRO-hector-gazebo-plugins
+  - sudo apt-get install -y ros-$ROS_DISTRO-joint-state-controller
+  - sudo apt-get install -y ros-$ROS_DISTRO-lms1xx
+  - sudo apt-get install -y ros-$ROS_DISTRO-serial
+  - sudo apt-get install -y ros-$ROS_DISTRO-roslint
+  - sudo apt-get install -y ros-$ROS_DISTRO-cv-bridge
+  - sudo apt-get install -y ros-$ROS_DISTRO-image-transport
+  - sudo apt-get install -y ros-$ROS_DISTRO-diff-drive-controller
+  - sudo apt-get install -y ros-$ROS_DISTRO-camera-info-manager
+  - sudo apt-get install -y ros-$ROS_DISTRO-robot-state-publisher
+  - sudo apt-get install -y libarmadillo-dev libgoogle-glog0v5 libgoogle-glog-dev protobuf-compiler libprotoc-dev
+
+
+# Compile and test (mark the build as failed if any step fails). If the
+# CATKIN_OPTIONS file exists, use it as an argument to catkin_make, for example
+# to blacklist certain packages.
+#
+# NOTE on testing: `catkin_make run_tests` will show the output of the tests
+# (gtest, nosetest, etc..) but always returns 0 (success) even if a test
+# fails. Running `catkin_test_results` aggregates all the results and returns
+# non-zero when a test fails (which notifies Travis the build failed).
+script:
+  - source /opt/ros/$ROS_DISTRO/setup.bash
+  - cd $CI_SOURCE_PATH
+  - catkin_make $( [ -f $CATKIN_OPTIONS ] && cat $CATKIN_OPTIONS )
+  # Run the tests, ensuring the path is set correctly.
+#  - source devel/setup.bash
+#  - catkin_make run_tests && catkin_test_results
